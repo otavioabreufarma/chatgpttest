@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Rust VIP Shop</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="container">
+      <h1>Loja VIP - Rust</h1>
+      <p class="subtitle">Login com Steam, compra via InfinityPay e ativação automática no servidor.</p>
+
+      <section id="auth-section" class="card">
+        <a class="btn" href="/auth/steam">Entrar com Steam</a>
+      </section>
+
+      <section id="shop-section" class="card hidden">
+        <div id="user-info"></div>
+
+        <div class="field">
+          <label>Discord ID (para receber cargo automático):</label>
+          <div class="row">
+            <input type="text" id="discord-id" placeholder="Ex: 123456789012345678" />
+            <button id="save-discord" class="btn secondary">Salvar</button>
+          </div>
+        </div>
+
+        <div class="field">
+          <label>Servidor:</label>
+          <select id="server-select">
+            <option value="alpha">Servidor Alpha</option>
+            <option value="beta">Servidor Beta</option>
+          </select>
+        </div>
+
+        <div class="plans">
+          <article class="plan">
+            <h3>VIP</h3>
+            <p>R$ 25,00 / 30 dias</p>
+            <button class="btn" data-plan="vip">Comprar VIP</button>
+          </article>
+
+          <article class="plan">
+            <h3>VIP+</h3>
+            <p>R$ 45,00 / 30 dias</p>
+            <button class="btn" data-plan="vip_plus">Comprar VIP+</button>
+          </article>
+        </div>
+
+        <button id="logout" class="btn danger">Sair</button>
+      </section>
+
+      <p id="status"></p>
+    </main>
+
+    <script src="/main.js"></script>
+  </body>
+</html>
