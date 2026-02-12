@@ -52,6 +52,10 @@ export function getUserById(id) {
   return db.users.find((u) => u.id === id) || null;
 }
 
+export function getUserByDiscordId(discordId) {
+  return db.users.find((u) => u.discordId === discordId) || null;
+}
+
 export function bindDiscord(userId, discordId) {
   const user = getUserById(userId);
   if (!user) return null;
@@ -137,4 +141,8 @@ export function setGrantStatus(grantId, status) {
 
 export function getActiveGrantsByUser(userId) {
   return db.grants.filter((g) => g.userId === userId && g.status === 'active');
+}
+
+export function listActiveGrantsByServer(serverId) {
+  return db.grants.filter((g) => g.serverId === serverId && g.status === 'active');
 }

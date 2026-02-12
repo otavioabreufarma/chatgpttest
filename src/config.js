@@ -3,13 +3,15 @@ export const config = {
     port: Number(process.env.PORT || 3000),
     baseUrl: process.env.BASE_URL || 'http://localhost:3000',
     sessionTtlHours: Number(process.env.SESSION_TTL_HOURS || 12),
+    linkTokenTtlMinutes: Number(process.env.LINK_TOKEN_TTL_MINUTES || 15),
   },
   steam: {
     apiKey: process.env.STEAM_API_KEY || '',
   },
   infinityPay: {
-    baseUrl: process.env.INFINITYPAY_BASE_URL || 'https://api.infinitypay.io',
+    baseUrl: process.env.INFINITYPAY_BASE_URL || 'https://api.infinitepay.io',
     token: process.env.INFINITYPAY_TOKEN || '',
+    sellerHandle: process.env.INFINITYPAY_SELLER_HANDLE || '',
     webhookSecret: process.env.INFINITYPAY_WEBHOOK_SECRET || '',
   },
   discord: {

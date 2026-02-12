@@ -11,7 +11,9 @@ import {
   findOrCreateUserBySteam,
   findPurchaseByReference,
   getActiveGrantsByUser,
+  getUserByDiscordId,
   getUserById,
+  listActiveGrantsByServer,
   listExpiredActiveGrants,
   setGrantStatus,
   updatePurchase,
@@ -29,6 +31,7 @@ import {
 } from './services.js';
 
 const sessions = new Map();
+const linkStates = new Map();
 
 const publicDir = path.resolve('public');
 
@@ -79,6 +82,31 @@ async function parseBody(req) {
   const chunks = [];
   for await (const chunk of req) chunks.push(chunk);
   return Buffer.concat(chunks);
+}
+
+function createLinkState(discordId) {
+  const token = crypto.randomBytes(24).toString('hex');
+  const expiresAt = Date.now() + config.app.linkTokenTtlMinutes * 60 * 1000;
+  linkStates.set(token, { discordId, expiresAt });
+  return token;
+}
+
+function consumeLinkState(token) {
+  const state = linkStates.get(token);
+  if (!state) return null;
+  linkStates.delete(token);
+  if (state.expiresAt < Date.now()) return null;
+  return state;
+}
+
+function requirePluginAuth(req, res, serverId) {
+  const auth = req.headers.authorization || '';
+  const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
+  if (!token || token !== config.rustServers[serverId]?.authToken) {
+    json(res, 401, { error: 'Unauthorized plugin request' });
+    return false;
+  }
+  return true;
 }
 
 async function serveStatic(req, res, pathname) {
@@ -159,6 +187,21 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, config.app.baseUrl);
   const pathname = url.pathname;
 
+  if (req.method === 'POST' && pathname === '/v1/link/discord/init') {
+    const raw = await parseBody(req);
+    const body = JSON.parse(raw.toString('utf8') || '{}');
+    if (!body.discordId || !/^\d{17,20}$/.test(body.discordId)) {
+      json(res, 400, { error: 'discordId inválido' });
+      return;
+    }
+
+    const stateToken = createLinkState(body.discordId);
+    const returnTo = `${config.app.baseUrl}/auth/steam/callback?link_state=${stateToken}`;
+    const steamAuthUrl = buildSteamLoginUrl(returnTo, config.app.baseUrl);
+    json(res, 200, { steamAuthUrl, stateToken, expiresInMinutes: config.app.linkTokenTtlMinutes });
+    return;
+  }
+
   if (req.method === 'GET' && pathname === '/auth/steam') {
     const returnTo = `${config.app.baseUrl}/auth/steam/callback`;
     const loginUrl = buildSteamLoginUrl(returnTo, config.app.baseUrl);
@@ -168,14 +211,22 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (req.method === 'GET' && pathname === '/auth/steam/callback') {
-    const steamId = await verifySteamLogin(Object.fromEntries(url.searchParams.entries()));
+    const params = Object.fromEntries(url.searchParams.entries());
+    const steamId = await verifySteamLogin(params);
     if (!steamId) {
       res.writeHead(302, { Location: '/?error=steam_login_failed' });
       res.end();
       return;
     }
+
     const profile = await fetchSteamProfile(steamId);
     const user = findOrCreateUserBySteam(steamId, profile);
+
+    const linkState = params.link_state ? consumeLinkState(params.link_state) : null;
+    if (linkState) {
+      bindDiscord(user.id, linkState.discordId);
+    }
+
     const sid = createSession(user.id);
     setSessionCookie(res, sid);
     res.writeHead(302, { Location: '/' });
@@ -219,6 +270,66 @@ const server = http.createServer(async (req, res) => {
     }
     const user = bindDiscord(session.user.id, body.discordId);
     json(res, 200, { user });
+    return;
+  }
+
+  if (req.method === 'POST' && pathname === '/v1/orders') {
+    const raw = await parseBody(req);
+    const body = JSON.parse(raw.toString('utf8') || '{}');
+
+    const user = getUserByDiscordId(body.discordId);
+    const serverMap = { s1: 'alpha', s2: 'beta', alpha: 'alpha', beta: 'beta' };
+    const serverId = serverMap[body.serverSlug];
+    const plan = config.plans[body.planCode];
+
+    if (!user || !serverId || !plan) {
+      json(res, 400, { error: 'Parâmetros inválidos ou usuário não vinculado.' });
+      return;
+    }
+
+    const purchase = createPurchase({
+      userId: user.id,
+      steamId: user.steamId,
+      planId: plan.id,
+      serverId,
+      durationDays: plan.durationDays,
+      amountCents: plan.priceCents,
+    });
+
+    try {
+      const checkout = await createInfinityPayCheckout({
+        amountCents: plan.priceCents,
+        planName: plan.name,
+        reference: purchase.providerReference,
+      });
+
+      updatePurchase(purchase.id, {
+        providerCheckoutId: checkout.id,
+        checkoutUrl: checkout.checkoutUrl,
+        providerMode: checkout.isMock ? 'mock' : 'live',
+      });
+
+      json(res, 200, { orderNsu: purchase.providerReference, checkoutUrl: checkout.checkoutUrl });
+    } catch (error) {
+      updatePurchase(purchase.id, { status: 'failed', failureReason: error.message });
+      json(res, 502, { error: `Falha ao criar checkout: ${error.message}` });
+    }
+    return;
+  }
+
+  if (req.method === 'GET' && pathname === '/v1/plugin/subscriptions/active') {
+    const serverId = url.searchParams.get('serverSlug') === 's2' ? 'beta' : 'alpha';
+    if (!requirePluginAuth(req, res, serverId)) return;
+
+    const list = listActiveGrantsByServer(serverId).map((g) => ({
+      subscriptionId: g.id,
+      steamId: g.steamId,
+      planCode: g.planId,
+      status: 'ACTIVE',
+      expiresAt: g.expiresAt,
+    }));
+
+    json(res, 200, list);
     return;
   }
 
@@ -284,8 +395,10 @@ const server = http.createServer(async (req, res) => {
     }
 
     const event = JSON.parse(raw.toString('utf8') || '{}');
-    const reference = event.external_reference || event.data?.external_reference;
+    const reference = event.order_nsu || event.external_reference || event.data?.external_reference;
     const status = event.status || event.data?.status;
+    const transactionNsu = event.transaction_nsu || event.data?.transaction_nsu;
+    const paidAmount = Number(event.amount_cents || event.data?.amount_cents || event.amount || 0);
 
     const purchase = findPurchaseByReference(reference);
     if (!purchase) {
@@ -294,7 +407,16 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (['paid', 'approved', 'succeeded'].includes(String(status).toLowerCase())) {
+      if (transactionNsu && purchase.transactionNsu === transactionNsu) {
+        json(res, 200, { ok: true, deduplicated: true });
+        return;
+      }
+      if (paidAmount && paidAmount !== purchase.amountCents) {
+        json(res, 400, { error: 'Valor divergente no webhook.' });
+        return;
+      }
       try {
+        updatePurchase(purchase.id, { transactionNsu: purchase.transactionNsu || `mock_${reference}` });
         await applyPurchase(purchase);
       } catch (error) {
         updatePurchase(purchase.id, { status: 'error', failureReason: error.message });
@@ -312,6 +434,7 @@ const server = http.createServer(async (req, res) => {
     const purchase = findPurchaseByReference(reference);
     if (purchase) {
       try {
+        updatePurchase(purchase.id, { transactionNsu: purchase.transactionNsu || `mock_${reference}` });
         await applyPurchase(purchase);
       } catch (error) {
         res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
