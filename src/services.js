@@ -55,8 +55,8 @@ export function signWebhookBody(raw) {
   return crypto.createHmac('sha256', config.infinityPay.webhookSecret).update(raw).digest('hex');
 }
 
-export async function createInfinityPayCheckout({ amountCents, planName, reference, metadata }) {
-  if (!config.infinityPay.token) {
+export async function createInfinityPayCheckout({ amountCents, planName, reference }) {
+  if (!config.infinityPay.token || !config.infinityPay.sellerHandle) {
     return {
       id: `mock_${reference}`,
       checkoutUrl: `${config.app.baseUrl}/mock-checkout-success?reference=${reference}`,
@@ -64,7 +64,7 @@ export async function createInfinityPayCheckout({ amountCents, planName, referen
     };
   }
 
-  const endpoint = `${config.infinityPay.baseUrl}/v1/checkout`;
+  const endpoint = `${config.infinityPay.baseUrl}/invoices/public/checkout/links`;
   const response = await fetch(endpoint, {
     method: 'POST',
     headers: {
@@ -72,12 +72,16 @@ export async function createInfinityPayCheckout({ amountCents, planName, referen
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      amount: amountCents,
-      currency: 'BRL',
-      description: `Compra ${planName}`,
-      external_reference: reference,
-      success_url: `${config.app.baseUrl}/checkout/success`,
-      metadata,
+      handle: config.infinityPay.sellerHandle,
+      webhook_url: `${config.app.baseUrl}/api/infinitypay/webhook`,
+      order_nsu: reference,
+      items: [
+        {
+          description: planName,
+          quantity: 1,
+          price: amountCents,
+        },
+      ],
     }),
   });
 
@@ -88,8 +92,8 @@ export async function createInfinityPayCheckout({ amountCents, planName, referen
 
   const payload = await response.json();
   return {
-    id: payload.id || payload.checkout_id,
-    checkoutUrl: payload.checkout_url || payload.url,
+    id: payload.id || payload.checkout_id || payload.invoice_id,
+    checkoutUrl: payload.url || payload.checkout_url || payload.link,
     isMock: false,
   };
 }
